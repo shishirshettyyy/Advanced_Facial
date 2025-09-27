@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Face Recognition Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Load face-api.js -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        #video-container { position: relative; }
+        #video, #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+        .modal-overlay {
+            transition: opacity 0.3s ease;
+        }
+        .modal-container {
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-6 max-w-6xl">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-indigo-600">Project Drishti: Offline Attendance</h1>
+            <p id="status" class="text-md text-gray-600 mt-2 bg-yellow-100 border border-yellow-300 rounded-md p-2 transition-all">Loading models, please wait...</p>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Left Column: Enrollment -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-2xl font-semibold mb-4 text-center">1. Student Enrollment</h2>
+                <div class="space-y-4">
+                    <input type="text" id="student-name" placeholder="Enter Student's Name" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <button id="enroll-button" class="w-full bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-700 transition-colors disabled:bg-gray-400" disabled>
+                        Enroll Student
+                    </button>
+                    <p class="text-xs text-center text-gray-500">Position one face in the camera and click enroll. The name and face data will be saved in your browser.</p>
+                </div>
+                 <div class="mt-6">
+                      <h3 class="font-semibold text-lg mb-2">Enrolled Students:</h3>
+                      <ul id="enrolled-list" class="space-y-2 text-sm max-h-48 overflow-y-auto bg-gray-50 p-2 rounded-md">
+                          <!-- Enrolled students will be listed here -->
+                      </ul>
+                 </div>
+            </div>
+
+            <!-- Middle Column: Camera Feed -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg flex flex-col items-center">
+                <h2 class="text-2xl font-semibold mb-4 text-center">2. Live Camera</h2>
+                <div id="video-container" class="w-full h-64 bg-gray-200 rounded-md shadow-inner flex items-center justify-center relative overflow-hidden">
+                    <video id="video" width="320" height="240" autoplay muted playsinline></video>
+                    <canvas id="overlay" width="320" height="240"></canvas>
+                </div>
+                <button id="start-attendance-button" class="mt-4 w-full bg-green-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400" disabled>
+                    Start Taking Attendance
+                </button>
+            </div>
+
+            <!-- Right Column: Attendance List -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-2xl font-semibold mb-4 text-center">3. Attendance List</h2>
+                <div id="attendance-list-container" class="bg-gray-50 p-4 rounded-md h-80 overflow-y-auto shadow-inner">
+                    <ul id="attendance-list" class="space-y-2">
+                        <!-- Attendance will be populated here -->
+                    </ul>
+                </div>
+                <button id="clear-data-button" class="mt-4 w-full bg-red-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-600 transition-colors">
+                    Clear All Data
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Custom Confirmation Modal -->
+    <div id="confirmation-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 opacity-0 pointer-events-none">
+        <div class="modal-container bg-white w-full max-w-md p-6 rounded-lg shadow-xl transform scale-95 opacity-0">
+            <h3 id="modal-title" class="text-xl font-bold mb-4">Confirm Action</h3>
+            <p id="modal-message" class="text-gray-600 mb-6">Are you sure you want to proceed?</p>
+            <div class="flex justify-end space-x-4">
+                <button id="modal-cancel-button" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                <button id="modal-confirm-button" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const statusEl = document.getElementById('status');
+        const enrollButton = document.getElementById('enroll-button');
+        const startButton = document.getElementById('start-attendance-button');
+        const clearButton = document.getElementById('clear-data-button');
+        const studentNameInput = document.getElementById('student-name');
+        const attendanceListEl = document.getElementById('attendance-list');
+        const enrolledListEl = document.getElementById('enrolled-list');
+        const modal = document.getElementById('confirmation-modal');
+        const modalConfirmBtn = document.getElementById('modal-confirm-button');
+        const modalCancelBtn = document.getElementById('modal-cancel-button');
+        const modalMessage = document.getElementById('modal-message');
+
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+        let labeledFaceDescriptors = [];
+        let faceMatcher = null;
+        let attendanceInterval = null;
+        const attendanceSet = new Set();
+        let confirmCallback = null;
+
+        // --- Utility Functions ---
+
+        function showStatus(message, isError = false) {
+            statusEl.textContent = message;
+            statusEl.className = `text-md text-gray-600 mt-2 rounded-md p-2 transition-all ${
+                isError ? 'bg-red-100 border border-red-300 text-red-800' : 'bg-yellow-100 border border-yellow-300'
+            }`;
+        }
+        
+        function showModal(message, onConfirm) {
+            modalMessage.textContent = message;
+            confirmCallback = onConfirm;
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            modal.querySelector('.modal-container').classList.remove('scale-95', 'opacity-0');
+        }
+
+        function hideModal() {
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            modal.querySelector('.modal-container').classList.add('scale-95', 'opacity-0');
+            confirmCallback = null;
+        }
+
+        function playBeep() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.1);
+            } catch (e) {
+                console.error("Could not play beep sound:", e);
+            }
+        }
+
+
+        // --- Core Application Logic ---
+
+        async function loadModels() {
+            try {
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                showStatus('Models loaded! You can now enroll students.');
+                enrollButton.disabled = false;
+            } catch (error) {
+                console.error("Error loading models:", error);
+                showStatus('Error loading models. Check console for details.', true);
+            }
+        }
+
+        async function startWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Error starting webcam:", err);
+                showStatus('Webcam access denied or not available.', true);
+            }
+        }
+
+        function loadEnrolledStudents() {
+            const data = localStorage.getItem('enrolledStudents');
+            if (data) {
+                try {
+                    const parsedData = JSON.parse(data);
+                    labeledFaceDescriptors = parsedData.map(d => faceapi.LabeledFaceDescriptors.fromJSON(d));
+                    if (labeledFaceDescriptors.length > 0) {
+                        faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
+                        startButton.disabled = false;
+                    }
+                    updateEnrolledList();
+                } catch (e) {
+                    console.error("Failed to parse enrolled students from localStorage", e);
+                    showStatus("Could not load student data. It might be corrupted.", true);
+                }
+            }
+        }
+        
+        function updateEnrolledList() {
+            enrolledListEl.innerHTML = '';
+            const studentNames = labeledFaceDescriptors.map(ld => ld.label);
+             if (studentNames.length === 0) {
+                const li = document.createElement('li');
+                li.textContent = "No students enrolled yet.";
+                li.className = "text-gray-500";
+                enrolledListEl.appendChild(li);
+            } else {
+                studentNames.sort().forEach(name => {
+                    const li = document.createElement('li');
+                    li.textContent = name;
+                    enrolledListEl.appendChild(li);
+                });
+            }
+        }
+
+        async function handleEnroll() {
+            const name = studentNameInput.value.trim();
+            if (!name) {
+                showStatus("Please enter a student's name.", true);
+                return;
+            }
+            if (labeledFaceDescriptors.some(ld => ld.label === name)) {
+                showStatus("A student with this name is already enrolled.", true);
+                return;
+            }
+
+            showStatus(`Enrolling ${name}... Please wait.`);
+            enrollButton.disabled = true;
+
+            try {
+                const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor();
+
+                if (detections) {
+                    const descriptor = new faceapi.LabeledFaceDescriptors(name, [detections.descriptor]);
+                    labeledFaceDescriptors.push(descriptor);
+                    faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
+                    
+                    const saveData = labeledFaceDescriptors.map(ld => ld.toJSON());
+                    localStorage.setItem('enrolledStudents', JSON.stringify(saveData));
+                    
+                    showStatus(`${name} enrolled successfully!`);
+                    studentNameInput.value = '';
+                    startButton.disabled = false;
+                    updateEnrolledList();
+
+                } else {
+                    showStatus('Enrollment failed. No face detected.', true);
+                }
+            } catch (error) {
+                console.error("Enrollment error:", error);
+                showStatus('An error occurred during enrollment.', true);
+            } finally {
+                enrollButton.disabled = false;
+            }
+        }
+        
+        function handleStartAttendance() {
+            if (attendanceInterval) {
+                clearInterval(attendanceInterval);
+                attendanceInterval = null;
+                startButton.textContent = 'Start Taking Attendance';
+                startButton.classList.replace('bg-yellow-500', 'bg-green-600');
+                startButton.classList.replace('hover:bg-yellow-600', 'hover:bg-green-700');
+                overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
+                return;
+            }
+
+            startButton.textContent = 'Stop Attendance';
+            startButton.classList.replace('bg-green-600', 'bg-yellow-500');
+            startButton.classList.replace('hover:bg-green-700', 'hover:bg-yellow-600');
+            
+            attendanceInterval = setInterval(async () => {
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptors();
+                const resizedDetections = faceapi.resizeResults(detections, { width: video.width, height: video.height });
+                
+                const canvasCtx = overlay.getContext('2d');
+                canvasCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+                if (faceMatcher) {
+                    resizedDetections.forEach(detection => {
+                        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+                        const box = detection.detection.box;
+                        const drawBox = new faceapi.draw.DrawBox(box, { label: bestMatch.toString() });
+                        drawBox.draw(overlay);
+
+                        if (bestMatch.label !== 'unknown') {
+                            markAttendance(bestMatch.label);
+                        }
+                    });
+                }
+            }, 500);
+        }
+        
+        function markAttendance(name) {
+            if (!attendanceSet.has(name)) {
+                attendanceSet.add(name);
+                playBeep();
+                updateAttendanceList();
+            }
+        }
+        
+        function updateAttendanceList() {
+            attendanceListEl.innerHTML = '';
+            const sortedStudents = Array.from(attendanceSet).sort();
+            sortedStudents.forEach(name => {
+                const li = document.createElement('li');
+                li.className = 'bg-green-100 border border-green-300 text-green-800 font-medium p-3 rounded-lg flex justify-between items-center shadow-sm';
+                
+                const studentNameSpan = document.createElement('span');
+                studentNameSpan.textContent = name;
+                
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'text-xs text-green-600';
+                timeSpan.textContent = new Date().toLocaleTimeString();
+
+                li.appendChild(studentNameSpan);
+                li.appendChild(timeSpan);
+                attendanceListEl.appendChild(li);
+            });
+        }
+
+        function clearAllData() {
+            localStorage.removeItem('enrolledStudents');
+            labeledFaceDescriptors = [];
+            faceMatcher = null;
+            attendanceSet.clear();
+            updateEnrolledList();
+            updateAttendanceList();
+            startButton.disabled = true;
+            showStatus('All data cleared.');
+            hideModal();
+        }
+
+        // --- Event Listeners and Initialization ---
+        enrollButton.addEventListener('click', handleEnroll);
+        startButton.addEventListener('click', handleStartAttendance);
+        clearButton.addEventListener('click', () => {
+            showModal("Are you sure you want to clear all enrolled students and attendance data? This cannot be undone.", clearAllData);
+        });
+
+        modalConfirmBtn.addEventListener('click', () => {
+            if (confirmCallback) {
+                confirmCallback();
+            }
+        });
+        modalCancelBtn.addEventListener('click', hideModal);
+
+        // --- Start the application ---
+        loadModels();
+        startWebcam();
+        loadEnrolledStudents();
+
+    </script>
+</body>
+</html>
